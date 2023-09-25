@@ -1,14 +1,14 @@
 # For now this collection of functions is split into two classes:
 
-# 'ThoughtGraph' should be instantiated as an object (some day the node and edge tables will be stored in this object and this will make more sense), for which you will normally only call one method:
+# 'ThoughtGraph' should be instantiated as an object, for which you will normally only call one method:
 #   from ThoughtGraph import ThoughtGraph
-#   tgraph = ThoughtGraph()
-#   tgraph.export_to_vis_js(nodes_df, edges_df, title, html_file_name)
+#   tgraph = ThoughtGraph(nodes_df, edges_df)
+#   tgraph.export_to_vis_js(title, html_file_name)
 
 # The 'utils' class is just a collection of class methods, and it should not be instantiated:
 #   from ThoughtGraph import utils
 #   sentences = ['The cat sat on a mat.', 'The dog chewed on a log.']
-#   part_of_speech_vector = utils.text_to_pos(sentences)
+#   part_of_speech = utils.text_to_pos(sentences)
 
 class ThoughtGraph():
 
