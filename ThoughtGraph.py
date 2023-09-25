@@ -1,221 +1,122 @@
+# For now this collection of functions is split into two classes:
 
-class thought_graph:
+# 'ThoughtGraph' should be instantiated as an object (some day the node and edge tables will be stored in this object and this will make more sense), for which you will normally only call one method:
+#   from ThoughtGraph import ThoughtGraph
+#   tgraph = ThoughtGraph()
+#   tgraph.export_to_vis_js(nodes_df, edges_df, title, html_file_name)
+
+# The 'utils' class is just a collection of class methods, and it should not be instantiated:
+#   from ThoughtGraph import utils
+#   sentences = ['The cat sat on a mat.', 'The dog chewed on a log.']
+#   part_of_speech_vector = utils.text_to_pos(sentences)
+
+class ThoughtGraph():
+
+    def __init__(self, nodes_df, edges_df):
+        self.nodes = nodes_df
+        self.edges = edges_df
     
-    def get_document_sentences(text_files):
-        import pandas as pd
-        from spacy.lang.en import English
-        import chardet
-        nlp = English()
-        nlp.add_pipe(nlp.create_pipe('sentencizer'))
-
-        doc_sent_dataframes_list = []
-
-        for text_file in text_files:
-            with open(text_file, 'rb') as in_txt:  # 'r', encoding='utf-8'
-                content = in_txt.read()
-                encoding = chardet.detect(content)['encoding']
-                if encoding == 'utf-8':
-                    content = str(content)
-                else: # 'Windows-1252' is apparently the same as 'cp1251'
-                    content = str(content.decode(encoding).encode('utf8'))  
-            document_name = text_file.replace('_content.txt', '')
-            sentences = [str(s) for s in nlp(content).sents] # sentences are 'spacy.tokens.span.Span' objects
-            doc_sent_df = pd.DataFrame({'document': document_name, 'sentence': sentences})
-            doc_sent_dataframes_list.append(doc_sent_df)
-
-        return pd.concat(doc_sent_dataframes_list)
-
-    
-    def featurize_sentences(all_sentences):
+    def get_vis_js_html(self):
         """
-            Use SentenceTransformer locally.
-            Vectors are converted to lists instead of numpy arrays because they are easier to save and restore to CSV format.
+        Generate HTML encoding vis_js graph from Pandas dataframes of nodes and edges.
         """
-        import pandas as pd
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
-        embedding_array = model.encode(all_sentences)
-        return pd.Series([[x for x in v] for v in embedding_array])
-    
-    
-    def hclust_vectors(df, LETTERS='ABCDEF', max_threshold=4):
-        from scipy.cluster.hierarchy import ward, fcluster
-        from scipy.spatial.distance import pdist
-        import math
-        # cluster the sentence vectors at various levels
-        X = df['vector'].tolist()
-        y = pdist(X, metric='cosine')
-        z = ward(y)
-
-        # LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        for i in range(len(LETTERS)):
-            letter = LETTERS[i]
-            col_name = f'cluster_{letter}'
-            cluster_id = fcluster(z, max_threshold/2**i, criterion='distance')
-            digits = 1 + math.floor(math.log10(max(cluster_id)))
-            df[col_name] = [letter + str(cid).zfill(digits) for cid in cluster_id]
-
-        cluster_cols = [c for c in df.columns if c.startswith('cluster_')]
-        return df.sort_values(by=cluster_cols)
-            
-            
-    def featurize_sentences_with_turing(all_sentences, my_secrets):
-        """
-        all_sentences: a Pandas Series of text items.
-        my_secrets: dict containing 'ace_turing_primary_key'
         
-        returns: Pandas dataframe with two columns:
-                'sentence' lists the unique items from the input Series, and 
-                'vector' gives the embedding for that item.
+        nodes_str = self.nodes.to_json(orient='records')
+        edges_str = self.edges.to_json(orient='records')
         
-        example:
-            sentence_vector = thought_graph.featurize_sentences(document_sentence['sentence'])
-            # Merge with the original document_sentence dataframe:
-            document_sentence['vector'] = document_sentence.merge(sentence_vector, how='left', on='sentence')
+        max_weight = max(self.edges['weight'])
+    
+        html_string = ( 
+        '     <style type="text/css">#mynetwork {width: 100%; height: 1000px; border: 3px}</style>\n'
+        '     <button onclick=toggle_motion()>Toggle motion</button>\n'
+        '     <div class="slidercontainer">\n'
+        '            <label>minimum edge weight:\n'
+        f'                <input type="range" min="0" max="{max_weight}" value="{max_weight/2}" step="{max_weight/100}" class="slider" id="min_edge_weight">\n'
+        '                <input type="text" id="min_edge_weight_display" size="2">\n'
+        '            </label>\n'
+        '     </div>\n'
+        '     <div id="mynetwork"></div>\n'
+        f'     <script type="text/javascript">NODE_LIST={nodes_str};FULL_EDGE_LIST={edges_str};</script>\n'
+        '     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>\n'
+        '     <script type="text/javascript">\n'
+        '       const sign_color = {pos:"blue", neg:"red", zero:"black"}\n'
+        '       const options = {physics:{maxVelocity: 1, minVelocity: 0.01}}\n'
+        '       var edgeFilterSlider\n'
+        '       var mynetwork\n'
+        '       var motion_flag = false\n'
+        '       function toggle_motion(){\n'
+        '           motion_flag = !motion_flag\n'
+        '           mynetwork.setOptions( { physics: motion_flag } )\n'
+        '       }\n'
+        '       function edgesFilter(edge){ return edge.value >= edgeFilterSlider.value }\n'
+        '       function init_network(){\n'
+        '           document.getElementById("min_edge_weight_display").value = 0.5\n'
+        '           document.getElementById("min_edge_weight").onchange = function(){\n'
+        '               document.getElementById("min_edge_weight_display").value = this.value\n'
+        '           }\n'
+        '           edgeFilterSlider = document.getElementById("min_edge_weight")\n'
+        '           edgeFilterSlider.addEventListener("change", (e) => {edgesView.refresh()})\n'
+        '           var container = document.getElementById("mynetwork")\n'
+        '           var EDGE_LIST = []\n'
+        '           for (var i = 0; i < FULL_EDGE_LIST.length; i++) {\n'
+        '               var edge = FULL_EDGE_LIST[i]\n'
+        '               edge["value"] = Math.abs(edge["weight"])\n'
+        '               edge["title"] = "weight " + edge["weight"]\n'
+        '               edge["sign"] = (edge["weight"] < 0) ? "neg" : "pos";\n'
+        '               edge["color"] = {color: sign_color[edge["sign"]] };\n'
+        '               edge["arrows"] = "to"\n'
+        '               EDGE_LIST.push(edge)\n'
+        '           }\n'
+        '           var nodes = new vis.DataSet(NODE_LIST)\n'
+        '           var edges = new vis.DataSet(EDGE_LIST)\n'
+        '           var nodesView = new vis.DataView(nodes)\n'
+        '           var edgesView = new vis.DataView(edges, { filter: edgesFilter })\n'
+        '           var data = { nodes: nodesView, edges: edgesView }\n'
+        '           mynetwork = new vis.Network(container, data, options)\n'
+        '       }\n'
+        '       init_network()\n'
+        '     </script>\n'
+    
+        )
+        return html_string
+    
+    
+    def export_to_vis_js(self, title, html_file_name):
         """
-        import http.client, urllib.request, urllib.parse, urllib.error, base64, json
-        import pandas as pd
-        from scipy.cluster.hierarchy import ward, fcluster
-        from scipy.spatial.distance import pdist
-        import math
+        Generate vis_js graph from Pandas dataframes of nodes and edges, and write to HTML file.
+        """
 
-        def send_turing_request(docs, conn, my_secrets):
-            docs = [d.replace('"','\\"') for d in docs]
-            body = '{{"queries": [{0}]}}'.format(', '.join([f'"{d}"' for d in docs]))
-            headers = {'Content-Type': 'application/json', 'Ocp-Apim-Subscription-Key': my_secrets.ace_turing_primary_key,}
-            params = urllib.parse.urlencode({})
-            try:
-                conn.request("POST", "/uni-genencoder/?%s" % params, body.encode('utf-8'), headers)
-                response = conn.getresponse()
-                result = response.read()
-            except e:
-                print(e)
-                results = None
-            return result
-
-        unique_sentences = all_sentences.unique()
+        vis_js_html = self.get_vis_js_html()
+        page_html =  ('<!DOCTYPE html>\n'
+            '<html lang="en">\n'
+            '    <head>\n'
+            f'       <title>{title}</title>\n'
+            '    </head>\n'
+            '    <body onload=init_network()>\n'
+            f'{vis_js_html}'
+            '\n'
+            '    </body>\n'
+            '</html>\n')
         
-        all_results = []
-        batch_size = 25
-
-        conn = http.client.HTTPSConnection(my_secrets.ace_turing_endpoint) # 'turing-academic.azure-api.net'
-        for i in range(0, len(unique_sentences), batch_size):
-            doc_batch = unique_sentences[i:i + batch_size]
-            print(f"item number {i}")
-            batch_results = send_turing_request(doc_batch, conn, my_secrets)
-            all_results.append(batch_results)
-
-        conn.close()
-        
-        # process JSON results
-        json_failure_count = 0
-        results_df_list = []
-        for i in range(len(all_results)):
-            batch_results = all_results[i]
-            rows = []
-            try:
-                br_obj = json.loads(batch_results)
-                for b in br_obj:
-                    rows.append({ 'sentence':b['query'], 'vector': b['vector'] })
-                results_df_list.append(pd.DataFrame(rows))
-            except:
-                print("Failed to load JSON for sentence: " + unique_sentences[i])
-                print(str(batch_results))
-                print()
-                json_failure_count = json_failure_count + 1
-
-        if json_failure_count > 0:
-            print(f"{json_failure_count} results failed to load from JSON")
-        sentence_vector = pd.concat(results_df_list)
-
-        # cluster the sentence vectors at various levels
-        X = sentence_vector['vector'].tolist()
-        y = pdist(X, metric='cosine')
-        z = ward(y)
-
-        max_threshold = 4
-        LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        for i in range(6):
-            letter = LETTERS[i]
-            col_name = f'cluster_{letter}'
-            cluster_id = fcluster(z, max_threshold/2**i, criterion='distance')
-            digits = 1 + math.floor(math.log10(max(cluster_id)))
-            sentence_vector[col_name] = [letter + str(cid).zfill(digits) for cid in cluster_id]
-
-        return sentence_vector
-
-    
-    def count_clusters_at_all_levels(dsc):
-        cluster_cols = [c for c in dsc.columns if c.startswith("cluster_")]
-        for col in cluster_cols:
-            num_clusters = len(set(dsc[col]))
-            print(f"{col}: {num_clusters}")
-    
-    
-    # tree graph functions
-    def filter_cluster_paths(df, cluster_cols):
-        """
-        Remove clusters that are identical to their child.
-        """
-        import pandas as pd
-
-        cluster_size = {}
-
-        for cluster_col in cluster_cols:
-            cluster_size.update(df.groupby(cluster_col).size())
-
-        raw_path = set()
-
-        for idx, row in df.iterrows():
-            raw_path.add(':'.join(row[cluster_cols]))
-
-        len(raw_path) # 473
-
-        filtered_paths = []
-        for rp_str in list(raw_path):
-            rp = rp_str.split(':')
-            fp = [rp[-1]]
-            for i in range(len(rp) - 1, 0, -1):
-                if cluster_size[rp[i-1]] > cluster_size[rp[i]]:
-                    fp.append(rp[i-1])
-            filtered_paths.append(list(reversed(fp)))
-        
-        return filtered_paths
+        with open(html_file_name, "wt") as html_file: 
+            html_file.write(page_html)
 
 
-    def get_nodes_and_edges_for_filtered_paths(filtered_paths):
-        """
-        Returns dataframes for nodes and edges of tree-structured graph representing hierarchical clustering 
-        sliced at various levels.
-        """
-        import pandas as pd
-        node_list = sorted(list({node for path in filtered_paths for node in path}))
-        nodes_pdf = pd.DataFrame({'id':range(len(node_list)), 'cluster':node_list})
-        node_id = {node:idx for node, idx in zip(node_list, range(len(node_list)))}
+    # Experimental visualizations: use at your own risk!
 
-        parent_of = {}
-        for fp in filtered_paths:
-            for i in reversed(range(1, len(fp))):
-                child = fp[i]
-                parent = fp[i-1]
-                parent_of[child] = parent
-        edges_pdf = pd.DataFrame({'from':node_id[v], 'to':node_id[k], 'weight':1.0} for k,v in parent_of.items())
-
-        return nodes_pdf, edges_pdf
-    
-    
-    def export_edge_thresholds_graph_to_vis_js(nodes_df, edges_df, title, html_file_name):
+    def export_edge_thresholds_graph_to_vis_js(self, title, html_file_name):
         """
         Generate vis_js graph from cluster data using between-centroid distance as edge weights, and write to HTML file.
 
         Example:
           nodes_df['group'] = [1 if l.startswith('lab_') else 2 if l.startswith('d') else 0 for l in nodes_df['label']]
-          export_edge_thresholds_graph_to_vis_js(nodes_df, edges_df, 'Cluster Graph', 'cluster_graph.html')
+          tgraph = ThoughtGraph(nodes_df, edges_df)
+          tgraph.export_edge_thresholds_graph_to_vis_js('Cluster Graph', 'cluster_graph.html')
         """
         max_weight = 1.0 # np.quantile(edges_df['weight'], 0.95)
 
-        nodes_str = nodes_df.to_json(orient='records')
-        edges_str = edges_df.to_json(orient='records')
+        nodes_str = self.nodes.to_json(orient='records')
+        edges_str = self.edges.to_json(orient='records')
 
         html_string = ( 
             '<!DOCTYPE html>\n'
@@ -272,9 +173,9 @@ class thought_graph:
         )
         with open(html_file_name, "wt") as html_file:
             html_file.write(html_string)
-        
-        
-    def collapsible_clusters(nodes_df, edges_df, clusters_df, title, html_file_name):
+
+
+    def collapsible_clusters(self, clusters_df, title, html_file_name):
         """
         Generate interactive graph with one level of collapsible clusters.
         
@@ -283,6 +184,9 @@ class thought_graph:
         clusters_df: cid, color (must be unique for each cluster), label, title
         Note that colors must be assigned to the clusters in the 'clusters_df' dataframe; these color names are what the nodes will be grouped by.
         The consituent nodes will be colored by the clusters they belong to.
+        
+        tgraph = ThoughtGraph(nodes_df, edges_df)
+        tgraph.collapsible_clusters(self, clusters_df, title, html_file_name)
         """
         
         nodes_str = nodes_df.to_json(orient='records')
@@ -372,76 +276,240 @@ class thought_graph:
         )
         with open(html_file_name, "wt") as html_file:
             html_file.write(html_string)
-
             
+
+
+
+# Collection of miscellaneous functions to be used as class methods.
+# Do not create an instance of this class.
+class utils():
+    import os, sys, pickle, regex
+    import pandas as pd
+    import numpy as np
     
-    def extract_pdf_content_to_text_files(pdf_directory, text_directory, my_secrets):
-        from azure.core.credentials import AzureKeyCredential
-        from azure.ai.formrecognizer import DocumentAnalysisClient
+    def text_to_pos(text_column, parsify_attributes=['pos_', 'dep_']):
+        import spacy as sp
+        nlp = sp.load('en_core_web_trf')
+    
+        def parsify(processed, attributes=parsify_attributes):
+            ptokens = []
+            for token in processed:
+                parts = set()
+                for attrib in attributes:
+                    val = token.__getattribute__(attrib).lower()
+                    parts.add(val)
+                ptokens.append('_'.join(parts))
+            return ' '.join(ptokens)
+     
+        return [parsify(processed)
+                for processed in nlp.pipe(text_column, n_process=12, batch_size=1000)]
+    
+    
+    def get_item_pair_stats(item_pair_df):
+        # item_pair_df must have columns named 'basket', and 'item'.
+        import pandas as pd
+        import sqlite3
+    
+        db = sqlite3.connect(":memory:")
+        
+        item_pair_df.to_sql("basket_item", db, if_exists="replace")
+    
+    
+        ITEM_PAIR_STATS_QUERY = """with 
+          bi as (
+            select basket, item
+              from basket_item
+              group by basket, item  -- be sure we only count one of each kind of item per basket
+          ),
+          item_counts as (
+            select item, count(*) item_count -- same as the number of baskets containing this item (see above)
+              from bi
+              group by item
+          ),
+          bi_count as (
+            select bi.*, ic.item_count  -- basket, item, item_count
+              from bi
+                join item_counts ic on bi.item=ic.item
+          ),
+          ips as (
+              select bi1.item item1, bi2.item item2,
+                      bi1.item_count item1_count, bi2.item_count item2_count,
+                      count(*) as both_count              
+                  from bi_count bi1
+                    join bi_count bi2  -- joining the table to itself
+                      on bi1.basket = bi2.basket  -- two items in the same basket
+                      and bi1.item != bi2.item    -- don't count the item being in the basket with itself
+                  group by bi1.item, bi1.item_count, 
+                           bi2.item, bi2.item_count
+          ),
+          cc as (
+            SELECT item1, item2, item1_count, item2_count, both_count,
+                  CAST(item1_count AS FLOAT)/(select count(distinct basket) from basket_item) as item1_prevalence, -- fraction of all baskets with item1
+                  CAST(item2_count AS FLOAT)/(select count(distinct basket) from basket_item) as item2_prevalence, -- fraction of all baskets with item2
+                  CAST(both_count AS FLOAT)/CAST(item1_count AS FLOAT) AS confidence  -- fraction of baskets with item1 that also have item2
+              FROM ips
+          )
+        select *, confidence/item2_prevalence lift from cc
+        """
+    
+        return pd.read_sql_query(ITEM_PAIR_STATS_QUERY, db)
+    
+    
+    def get_nodes_and_edges_from_item_pair_stats(cooccurrence_pdf):
+        """
+        Convert a Pandas dataframe of item-pair statistics to separate dataframes for nodes and edges.
+        """
+        import pandas as pd
         from collections import Counter
-        import os
-        import re
+        
+        item_stats = {r['item1']:{'count':r['item1_count'], 'prevalence':r['item1_prevalence']} 
+                        for idx, r in cooccurrence_pdf.iterrows()}
+     
+        item_stats.update({r['item2']:{'count':r['item2_count'], 'prevalence':r['item2_prevalence']} 
+                        for idx, r in cooccurrence_pdf.iterrows()})
+     
+        nodes_df = pd.DataFrame([{'label':k,'count':v['count'], 'prevalence':v['prevalence']}  
+                        for k,v in item_stats.items()])
+        nodes_df['id'] = nodes_df.index
+       
+        edges_df = cooccurrence_pdf.copy()
+        node_id = {r['label']:r['id'] for idx, r in nodes_df.iterrows()}
+        edges_df['from'] = [node_id[nn] for nn in edges_df['item1']]
+        edges_df['to'] = [node_id[nn] for nn in edges_df['item2']]
+        
+        print("Your graph will have {0} nodes and {1} edges.".format( len(nodes_df), len(edges_df) ))
+     
+        return nodes_df, edges_df[[ 'from', 'to', 'both_count', 'confidence', 'lift']]
+    
+    
+    def make_cluster_node_title(row, text_df):
+        title = f"{row['label']}\n({row['type']}, {row['count']} examples)"
+        if row['type'] == 'instruction_cluster':
+            cluster_id = row['label']
+            examples = text_df[ text_df['instruction_B'] == cluster_id ]['instruction'].sample(6).values
+            title += '\n' + '\n'.join(examples)
+        if row['type'] == 'response_cluster':
+            cluster_id = row['label']
+            examples = text_df[ text_df['response_B'] == cluster_id ]['response'].sample(6).values
+            title += '\n' + '\n'.join(examples)        
+        return title
+    
+    
+    def pivot_term_document_matrix_to_basket_item(tdm_pdf):
         import pandas as pd
+        # This is just a simple pivot
+        basket_item_rows = []
+        for i, row in enumerate(tdm_pdf.to_dict(orient="records")):
+            for k, v in row.items():
+                if v > 0:
+                    basket_item_rows.append({'basket': i, "item": k})
         
-        def analyze_document(document_path, document_analysis_client):
-            with open(document_path, "rb") as f:
-                poller = document_analysis_client.begin_analyze_document(
-                    "prebuilt-document", document=f
-                )
-            result = poller.result()
-            return result
-
-
-        def get_entities_table(result):
-            return pd.DataFrame([entity.to_dict() for entity in result.entities])
-
-
-        def preprocess_content(txt):
-            # There are 2 main reasons a line will have only a few words: it is a section heading, or it is the end of a sentence.
-
-            lines = txt.split('\n')
-            line_counter = Counter(lines)
-            lines = [line for line in lines if line_counter[line] <= 4]
-            lines = [re.sub('-$', '', line) for line in lines]
-            lines = [l + '.' if (len(l) > 5 and len(l.split(' ')) < 4 and not l.endswith('.')) else l for l in lines] # end apparent section headings with a period
-            # Assume a line is a section heading if:
-            # * it has more than 5 characters
-            # * it has fewer than 4 words
-            # * it does not already end in a period
-            reconstituted = ' '.join(lines)
-            reconstituted = reconstituted.replace('- ', '')
-            return reconstituted
-
-        document_files = [f for f in os.listdir(pdf_directory) if f.endswith('.pdf')]
-
-        da_client = DocumentAnalysisClient(
-            endpoint = my_secrets.form_recognizer_endpoint, credential=AzureKeyCredential(my_secrets.form_recognizer_key)
-        )
+        basket_item = pd.DataFrame(basket_item_rows)
+        return basket_item
+    
+    
+    def get_leiden_partition(edges):
+        import leidenalg   # https://pypi.org/project/leidenalg/
+        import igraph as ig
         
-        os.makedirs(text_directory, exist_ok=True)
-        for document_file in document_files:
-            print(f"Extracting text content from '{document_file}'")
-            document_path = pdf_directory + document_file
-            outfile_base = document_file.replace('.pdf', '').replace('  ', ' ').replace(' ', '_')
-            content_text_file = text_directory + outfile_base + '_content.txt'
-            result = analyze_document(document_path, da_client)
-            # entities_file = outfile_base + '_entities.csv'
-            # entities_table = get_entities_table(result)
-            # entities_table.to_csv(entities_file)
-            pp_content = preprocess_content(result.content)
-            print(f"writing content to '{content_text_file}'")
-            with open(content_text_file, 'w', encoding='utf-8') as txt_fh:
-                txt_fh.write(pp_content)
-
-        da_client.close()
+        edge_tuple_list = [(row['from'], row['to'], row['weight']) for row in edges[['from', 'to', 'weight']].to_dict(orient='records') ]
+        G = ig.Graph.TupleList(edge_tuple_list)
         
+        # G = ig.Graph.DictList( edges[['from', 'to', 'weight']].to_dict(orient='records'))
+        
+        leiden_partition = leidenalg.find_partition(G, leidenalg.ModularityVertexPartition);
+        return leiden_partition.membership
+    
+    
+    def add_cluster_cols(df, embedding_col='embedding', prefix='cluster', letters='ABCDE', max_threshold=1):
+        from scipy.cluster.hierarchy import ward, fcluster
+        from scipy.spatial.distance import pdist
+        import math
+    
+        # cluster the sentence vectors at various levels
+        X = df[embedding_col].tolist()
+        y = pdist(X, metric='cosine')
+        z = ward(y)
+    
+        for i in range(len(letters)):
+            letter = letters[i]
+            col_name = f'{prefix}_{letter}'
+            cluster_id = fcluster(z, max_threshold/2**i, criterion='distance')
+            digits = 1 + math.floor(math.log10(max(cluster_id)))
+            df[col_name] = [col_name + str(cid).zfill(digits) for cid in cluster_id]
+    
+        cluster_cols = [c for c in df.columns if c.startswith(f'{prefix}_')]
+        return df.sort_values(by=cluster_cols)
 
-    def get_column_types(df):
+
+    def count_clusters_at_all_levels(dsc):
+        cluster_cols = [c for c in dsc.columns if c.startswith("cluster_")]
+        for col in cluster_cols:
+            num_clusters = len(set(dsc[col]))
+            print(f"{col}: {num_clusters}")
+
+
+    def filter_cluster_paths(df, cluster_cols):
         """
-        Is something like this built into Pandas?
+        Remove clusters that are identical to their child.
         """
         import pandas as pd
-        return pd.DataFrame([{'column': col, 'type':type(df[col][0]).__name__} for col in df.columns])
+
+        cluster_size = {}
+
+        for cluster_col in cluster_cols:
+            cluster_size.update(df.groupby(cluster_col).size())
+
+        raw_path = set()
+
+        for idx, row in df.iterrows():
+            raw_path.add(':'.join(row[cluster_cols]))
+
+        len(raw_path) # 473
+
+        filtered_paths = []
+        for rp_str in list(raw_path):
+            rp = rp_str.split(':')
+            fp = [rp[-1]]
+            for i in range(len(rp) - 1, 0, -1):
+                if cluster_size[rp[i-1]] > cluster_size[rp[i]]:
+                    fp.append(rp[i-1])
+            filtered_paths.append(list(reversed(fp)))
+        
+        return filtered_paths
+
+
+    def get_nodes_and_edges_for_filtered_paths(filtered_paths):
+        """
+        Returns dataframes for nodes and edges of tree-structured graph representing hierarchical clustering 
+        sliced at various levels.
+        """
+        import pandas as pd
+        node_list = sorted(list({node for path in filtered_paths for node in path}))
+        nodes_pdf = pd.DataFrame({'id':range(len(node_list)), 'cluster':node_list})
+        node_id = {node:idx for node, idx in zip(node_list, range(len(node_list)))}
+
+        parent_of = {}
+        for fp in filtered_paths:
+            for i in reversed(range(1, len(fp))):
+                child = fp[i]
+                parent = fp[i-1]
+                parent_of[child] = parent
+        edges_pdf = pd.DataFrame({'from':node_id[v], 'to':node_id[k], 'weight':1.0} for k,v in parent_of.items())
+
+        return nodes_pdf, edges_pdf
+        
+        
+    def featurize_sentences(all_sentences, sentence_transformer_model='all-mpnet-base-v2'):
+        """
+            Use SentenceTransformer locally.
+            Vectors are converted to lists instead of numpy arrays because they are easier to save and restore to CSV format.
+        """
+        import pandas as pd
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer('sentence-transformers/{sentence_transformer_model}')
+        embedding_array = model.encode(all_sentences)
+        return pd.Series([[x for x in v] for v in embedding_array])
 
 
     # Cluster info methods
@@ -574,45 +642,3 @@ class thought_graph:
         colors = rainbow(len(levels))
         return {levels[i]:colors[i] for i in range(len(levels))}
         
-
-    def split_into_sentences(text):
-        """
-        To Do: remove reference numbers, like '[1,2,3-5]'
-        New patterns: 'et al.', floating point numbers
-        https://stackoverflow.com/questions/4576077/how-can-i-split-a-text-into-sentences
-        """
-        import re
-        abbreviations = "(et al|etc)[.]"
-        alphabets= "([A-Za-z])"
-        prefixes = "(Mr|St|Mrs|Ms|Dr)[.]"
-        suffixes = "(Inc|Ltd|Jr|Sr|Co)"
-        starters = "(Mr|Mrs|Ms|Dr|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"
-        acronyms = "([A-Z][.][A-Z][.](?:[A-Z][.])?)"
-        websites = "[.](com|net|org|io|gov)"
-
-        text = " " + text + "  "
-        text = text.replace("\n"," ")
-        text = re.sub("(\\d+)[.](\\d+)","\\1<prd>\\2",text)
-        text = re.sub(abbreviations,"\\1<prd>",text)
-        text = re.sub(prefixes,"\\1<prd>",text)
-        text = re.sub(websites,"<prd>\\1",text)
-        if "Ph.D" in text: text = text.replace("Ph.D.","Ph<prd>D<prd>")
-        text = re.sub("\s" + alphabets + "[.] "," \\1<prd> ",text)
-        text = re.sub(acronyms+" "+starters,"\\1<stop> \\2",text)
-        text = re.sub(alphabets + "[.]" + alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>\\3<prd>",text)
-        text = re.sub(alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>",text)
-        text = re.sub(" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
-        text = re.sub(" "+suffixes+"[.]"," \\1<prd>",text)
-        text = re.sub(" " + alphabets + "[.]"," \\1<prd>",text)
-        if "”" in text: text = text.replace(".”","”.")
-        if "\"" in text: text = text.replace(".\"","\".")
-        if "!" in text: text = text.replace("!\"","\"!")
-        if "?" in text: text = text.replace("?\"","\"?")
-        text = text.replace(".",".<stop>")
-        text = text.replace("?","?<stop>")
-        text = text.replace("!","!<stop>")
-        text = text.replace("<prd>",".")
-        sentences = text.split("<stop>")
-        sentences = sentences[:-1]
-        sentences = [s.strip() for s in sentences]
-        return sentences
